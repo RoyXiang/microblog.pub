@@ -1,0 +1,18 @@
+{
+  "scripts": {
+    "formation": {
+      "web": {
+        "quantity": 1
+      },
+      "incoming": {
+        "quantity": 1
+      },
+      "outgoing": {
+        "quantity": 1
+      }
+    },
+    "dokku": {
+      "predeploy": "inv update --no-update-deps"
+    }
+  }
+}

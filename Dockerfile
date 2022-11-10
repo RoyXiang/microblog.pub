@@ -9,8 +9,9 @@ ENV PYTHONUNBUFFERED=1 \
 ENV PATH="$POETRY_HOME/bin:$VENV_PATH/bin:$PATH"
 
 FROM python-base as builder-base
-RUN apt-get update
-RUN apt-get install -y --no-install-recommends curl build-essential gcc libffi-dev libssl-dev libxml2-dev libxslt1-dev zlib1g-dev libxslt-dev gcc libjpeg-dev zlib1g-dev libwebp-dev
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl build-essential gcc libffi-dev libssl-dev libxml2-dev libxslt1-dev zlib1g-dev libxslt-dev gcc libjpeg-dev zlib1g-dev libwebp-dev \
+  && rm -rf /var/lib/apt/lists/*
 # rustc is needed to compile Python packages
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
@@ -20,13 +21,13 @@ COPY poetry.lock pyproject.toml ./
 RUN poetry install --only main
 
 FROM python-base as production
-RUN apt-get update
-RUN apt-get install -y --no-install-recommends libjpeg-dev libxslt1-dev libxml2-dev libxslt-dev
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends libjpeg62-turbo libxslt1.1 libxml2 \
+  && rm -rf /var/lib/apt/lists/*
 RUN groupadd --gid 1000 microblogpub \
   && useradd --uid 1000 --gid microblogpub --shell /bin/bash microblogpub
 COPY --from=builder-base $PYSETUP_PATH $PYSETUP_PATH
-COPY . /app/
-RUN chown -R 1000:1000 /app
+COPY --chown=microblogpub:microblogpub . /app/
 USER microblogpub
 WORKDIR /app
 EXPOSE 8000

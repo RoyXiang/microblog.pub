@@ -1151,7 +1151,8 @@ async def nodeinfo(
     )
 
 
-proxy_client = httpx.AsyncClient(follow_redirects=True, http2=True)
+proxy_transport = httpx.AsyncHTTPTransport(retries=3)
+proxy_client = httpx.AsyncClient(transport=proxy_transport, follow_redirects=True)
 
 
 async def _proxy_get(

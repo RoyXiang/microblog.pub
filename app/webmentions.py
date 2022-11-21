@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from loguru import logger
+from sqlalchemy import func
 from sqlalchemy import select
 
 from app import models
@@ -19,6 +20,8 @@ from app.boxes import get_outbox_object_by_slug_and_short_id
 from app.database import AsyncSession
 from app.database import get_db_session
 from app.utils import microformats
+from app.utils.facepile import Face
+from app.utils.facepile import WebmentionReply
 from app.utils.url import check_url
 from app.utils.url import is_url_valid
 
@@ -133,17 +136,6 @@ async def webmention_endpoint(
             return JSONResponse(content={}, status_code=200)
 
     webmention_type = models.WebmentionType.UNKNOWN
-    for item in data.get("items", []):
-        if target in item.get("properties", {}).get("in-reply-to", []):
-            webmention_type = models.WebmentionType.REPLY
-            break
-        elif target in item.get("properties", {}).get("like-of", []):
-            webmention_type = models.WebmentionType.LIKE
-            break
-        elif target in item.get("properties", {}).get("repost-of", []):
-            webmention_type = models.WebmentionType.REPOST
-            break
-
     webmention: models.Webmention
     if existing_webmention_in_db:
         # Undelete if needed
@@ -177,6 +169,28 @@ async def webmention_endpoint(
         )
         db_session.add(notif)
 
+    # Determine the webmention type
+    for item in data.get("items", []):
+        if target in item.get("properties", {}).get(
+            "in-reply-to", []
+        ) and WebmentionReply.from_webmention(webmention):
+            webmention_type = models.WebmentionType.REPLY
+            break
+        elif target in item.get("properties", {}).get(
+            "like-of", []
+        ) and Face.from_webmention(webmention):
+            webmention_type = models.WebmentionType.LIKE
+            break
+        elif target in item.get("properties", {}).get(
+            "repost-of", []
+        ) and Face.from_webmention(webmention):
+            webmention_type = models.WebmentionType.REPOST
+            break
+
+    if webmention_type != models.WebmentionType.UNKNOWN:
+        webmention.webmention_type = webmention_type
+        await db_session.flush()
+
     # Handle side effect
     await _handle_webmention_side_effects(db_session, webmention, mentioned_object)
     await db_session.commit()
@@ -191,7 +205,13 @@ async def _handle_webmention_side_effects(
 ) -> None:
     if webmention.webmention_type == models.WebmentionType.UNKNOWN:
         # TODO: recount everything
-        mentioned_object.webmentions_count = mentioned_object.webmentions_count + 1
+        mentioned_object.webmentions_count = await db_session.scalar(
+            select(func.count(models.Webmention.id)).where(
+                models.Webmention.is_deleted.is_(False),
+                models.Webmention.outbox_object_id == mentioned_object.id,
+                models.Webmention.webmention_type == models.WebmentionType.UNKNOWN,
+            )
+        )
     elif webmention.webmention_type == models.WebmentionType.LIKE:
         mentioned_object.likes_count = await _get_outbox_likes_count(
             db_session, mentioned_object

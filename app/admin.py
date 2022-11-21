@@ -11,6 +11,7 @@ from fastapi.exceptions import HTTPException
 from fastapi.responses import RedirectResponse
 from loguru import logger
 from sqlalchemy import and_
+from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy import select
@@ -61,14 +62,17 @@ async def user_session_or_redirect(
     )
 
     if not session:
+        logger.info("No existing admin session")
         raise _RedirectToLoginPage
 
     try:
-        loaded_session = session_serializer.loads(session, max_age=3600 * 12)
+        loaded_session = session_serializer.loads(session, max_age=3600 * 24 * 3)
     except Exception:
+        logger.exception("Failed to validate admin session")
         raise _RedirectToLoginPage
 
     if not loaded_session.get("is_logged_in"):
+        logger.info(f"Admin session invalidated: {loaded_session}")
         raise _RedirectToLoginPage
 
     return None
@@ -718,13 +722,9 @@ async def get_notifications(
     actors_metadata = await get_actors_metadata(
         db_session, [notif.actor for notif in notifications if notif.actor]
     )
-
-    for notif in notifications:
-        notif.is_new = False
-    await db_session.commit()
-
     more_unread_count = 0
     next_cursor = None
+
     if notifications and remaining_count > page_size:
         decoded_next_cursor = notifications[-1].created_at
         next_cursor = pagination.encode_cursor(decoded_next_cursor)
@@ -738,7 +738,8 @@ async def get_notifications(
             )
         )
 
-    return await templates.render_template(
+    # Render the template before we change the new flag on notifications
+    tpl_resp = await templates.render_template(
         db_session,
         request,
         "notifications.html",
@@ -749,6 +750,13 @@ async def get_notifications(
             "more_unread_count": more_unread_count,
         },
     )
+
+    if len({notif.id for notif in notifications if notif.is_new}):
+        for notif in notifications:
+            notif.is_new = False
+        await db_session.commit()
+
+    return tpl_resp
 
 
 @router.get("/object")
@@ -872,6 +880,42 @@ async def admin_actions_force_delete(
         None,
     )
     ap_object_to_delete.is_deleted = True
+    await db_session.commit()
+    return RedirectResponse(redirect_url, status_code=302)
+
+
+@router.post("/actions/force_delete_webmention")
+async def admin_actions_force_delete_webmention(
+    request: Request,
+    webmention_id: int = Form(),
+    redirect_url: str = Form(),
+    csrf_check: None = Depends(verify_csrf_token),
+    db_session: AsyncSession = Depends(get_db_session),
+) -> RedirectResponse:
+    webmention = await boxes.get_webmention_by_id(db_session, webmention_id)
+    if not webmention:
+        raise ValueError(f"Cannot find {webmention_id}")
+    if not webmention.outbox_object:
+        raise ValueError(f"Missing related outbox object for {webmention_id}")
+
+    # TODO: move this
+    logger.info(f"Deleting {webmention_id}")
+    webmention.is_deleted = True
+    await db_session.flush()
+    from app.webmentions import _handle_webmention_side_effects
+
+    await _handle_webmention_side_effects(
+        db_session, webmention, webmention.outbox_object
+    )
+    # Delete related notifications
+    notif_deletion_result = await db_session.execute(
+        delete(models.Notification)
+        .where(models.Notification.webmention_id == webmention.id)
+        .execution_options(synchronize_session=False)
+    )
+    logger.info(
+        f"Deleted {notif_deletion_result.rowcount} notifications"  # type: ignore
+    )
     await db_session.commit()
     return RedirectResponse(redirect_url, status_code=302)
 

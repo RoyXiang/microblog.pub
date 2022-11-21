@@ -74,6 +74,7 @@ from app.uploads import UPLOAD_DIR
 from app.utils import pagination
 from app.utils.emoji import EMOJIS_BY_NAME
 from app.utils.facepile import Face
+from app.utils.facepile import WebmentionReply
 from app.utils.facepile import merge_faces
 from app.utils.highlight import HIGHLIGHT_CSS_HASH
 from app.utils.url import check_url
@@ -784,7 +785,7 @@ async def outbox_by_public_id(
         request,
         "object.html",
         {
-            "replies_tree": replies_tree,
+            "replies_tree": _merge_replies(replies_tree, webmentions),
             "outbox_object": maybe_object,
             "likes": _merge_faces_from_inbox_object_and_webmentions(
                 likes,
@@ -811,6 +812,7 @@ def _filter_webmentions(
         not in [
             models.WebmentionType.LIKE,
             models.WebmentionType.REPOST,
+            models.WebmentionType.REPLY,
         ]
     ]
 
@@ -830,6 +832,33 @@ def _merge_faces_from_inbox_object_and_webmentions(
     return merge_faces(
         [Face.from_inbox_object(obj) for obj in inbox_objects] + wm_faces
     )
+
+
+def _merge_replies(
+    reply_tree_node: boxes.ReplyTreeNode,
+    webmentions: list[models.Webmention],
+) -> boxes.ReplyTreeNode:
+    # TODO: return None as we update the object in place
+    webmention_replies = []
+    for wm in [
+        wm for wm in webmentions if wm.webmention_type == models.WebmentionType.REPLY
+    ]:
+        if rep := WebmentionReply.from_webmention(wm):
+            webmention_replies.append(
+                boxes.ReplyTreeNode(
+                    ap_object=None,
+                    wm_reply=rep,
+                    is_requested=False,
+                    children=[],
+                )
+            )
+
+    reply_tree_node.children = sorted(
+        reply_tree_node.children + webmention_replies,
+        key=lambda node: node.published_at,
+        reverse=True,
+    )
+    return reply_tree_node
 
 
 @app.get("/articles/{short_id}/{slug}")
@@ -865,7 +894,7 @@ async def article_by_slug(
         request,
         "object.html",
         {
-            "replies_tree": replies_tree,
+            "replies_tree": _merge_replies(replies_tree, webmentions),
             "outbox_object": maybe_object,
             "likes": _merge_faces_from_inbox_object_and_webmentions(
                 likes,
@@ -1151,8 +1180,10 @@ async def nodeinfo(
     )
 
 
-proxy_transport = httpx.AsyncHTTPTransport(retries=3)
-proxy_client = httpx.AsyncClient(transport=proxy_transport, follow_redirects=True)
+proxy_client = httpx.AsyncClient(
+    follow_redirects=True,
+    timeout=httpx.Timeout(timeout=10.0),
+)
 
 
 async def _proxy_get(
@@ -1432,7 +1463,7 @@ async def json_feed(
                 ],
             }
         )
-    return {
+    result = {
         "version": "https://jsonfeed.org/version/1",
         "title": f"{LOCAL_ACTOR.display_name}'s microblog'",
         "home_page_url": LOCAL_ACTOR.url,
@@ -1440,10 +1471,12 @@ async def json_feed(
         "author": {
             "name": LOCAL_ACTOR.display_name,
             "url": LOCAL_ACTOR.url,
-            "avatar": LOCAL_ACTOR.icon_url,
         },
         "items": data,
     }
+    if LOCAL_ACTOR.icon_url:
+        result["author"]["avatar"] = LOCAL_ACTOR.icon_url  # type: ignore
+    return result
 
 
 async def _gen_rss_feed(
@@ -1455,7 +1488,8 @@ async def _gen_rss_feed(
     fg.description(f"{LOCAL_ACTOR.display_name}'s microblog")
     fg.author({"name": LOCAL_ACTOR.display_name})
     fg.link(href=LOCAL_ACTOR.url, rel="alternate")
-    fg.logo(LOCAL_ACTOR.icon_url)
+    if LOCAL_ACTOR.icon_url:
+        fg.logo(LOCAL_ACTOR.icon_url)
     fg.language("en")
 
     outbox_objects = await _get_outbox_for_feed(db_session)

@@ -142,6 +142,17 @@
 {% endblock %}
 {% endmacro %}
 
+{% macro admin_force_delete_webmention_button(webmention_id, permalink_id=None) %}
+{% block admin_force_delete_webmention_button scoped %}
+<form action="{{ request.url_for("admin_actions_force_delete_webmention") }}" class="object-delete-form" method="POST">
+    {{ embed_csrf_token() }}
+    {{ embed_redirect_url(permalink_id) }}
+    <input type="hidden" name="webmention_id" value="{{ webmention_id }}">
+    <input type="submit" value="local delete">
+</form>
+{% endblock %}
+{% endmacro %}
+
 {% macro admin_announce_button(ap_object_id, permalink_id=None) %}
 {% block admin_announce_button scoped %}
 <form action="{{ request.url_for("admin_actions_announce") }}" method="POST">
@@ -441,11 +452,55 @@
 {% endblock %}
 {% endmacro %}
 
-{% macro display_object(object, likes=[], shares=[], webmentions=[], expanded=False, actors_metadata={}, is_object_page=False) %}
+{% macro display_webmention_reply(wm_reply) %}
+{% block display_webmention_reply scoped %}
+
+<div class="ap-object u-comment h-cite">
+<div class="actor-box h-card p-author">
+    <div class="icon-box">
+        <img src="{{ wm_reply.face.picture_url }}" alt="{{ wm_reply.face.name }}'s avatar" class="actor-icon u-photo">
+    </div>
+    <a href="{{ wm_reply.face.url }}" class="u-url">
+        <div><strong class="p-name">{{ wm_reply.face.name | clean_html_wm | safe }}</strong></div>
+        <div class="actor-handle">{{ wm_reply.face.url | truncate(64, True) }}</div>
+    </a>
+</div>
+
+    <p class="in-reply-to">in reply to <a href="{{ wm_reply.in_reply_to }}" title="{{ wm_reply.in_reply_to }}" rel="nofollow">
+        this note
+    </a></p>
+
+    <div class="obj-content margin-top-20">
+    <div class="e-content">
+        {{ wm_reply.content | clean_html_wm | safe }}
+    </div>
+    </div>
+
+    <nav class="flexbox activity-bar margin-top-20">
+    <ul>
+        <li>
+            <div><a href="{{ wm_reply.url }}" rel="nofollow" class="object-permalink u-url u-uid">permalink</a></div>
+        </li>
+        <li>
+            <time class="dt-published" datetime="{{ wm_reply.published_at.replace(microsecond=0).isoformat() }}" title="{{ wm_reply.published_at.replace(microsecond=0).isoformat() }}">{{ wm_reply.published_at | timeago }}</time>
+        </li>
+        {% if is_admin %}
+            <li>
+                {{ admin_force_delete_webmention_button(wm_reply.webmention_id) }}
+            </li>
+        {% endif %}
+    </ul>
+    </nav>
+</div>
+
+{% endblock %}
+{% endmacro %}
+
+{% macro display_object(object, likes=[], shares=[], webmentions=[], expanded=False, actors_metadata={}, is_object_page=False, is_h_entry=True) %}
 {% block display_object scoped %}
 {% set is_article_mode = object.is_from_outbox and object.ap_type == "Article" and is_object_page %}
 {% if object.ap_type in ["Note", "Article", "Video", "Page", "Question", "Event"] %}
-<div class="ap-object {% if expanded %}ap-object-expanded {% endif %}h-entry" id="{{ object.permalink_id }}">
+<div class="ap-object {% if expanded %}ap-object-expanded {% endif %}{% if is_h_entry %}h-entry{% endif %}" id="{{ object.permalink_id }}">
 
     {% if is_article_mode %}
     <data class="h-card">

@@ -467,6 +467,9 @@ a.label-btn {
   span {
     color: $muted-color;
   }
+  span.new {
+    color: $secondary-color;
+  }
 }
 .actor-metadata {
     color: $muted-color;
@@ -540,4 +543,8 @@ a.label-btn {
   h3::after {
     content: ': ';
   }
+}
+
+.margin-top-20 {
+  margin-top: 20px;
 }

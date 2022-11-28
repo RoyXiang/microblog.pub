@@ -98,6 +98,39 @@ privacy_replace = [
 ]
 ```
 
+### Disabling certain notification types
+
+All notifications are enabled by default.
+
+You can disabled specific notifications by adding them to the `disabled_notifications` list.
+
+This example disables likes and shares notifications:
+
+```
+disabled_notifications = ["like", "announce"]
+```
+
+#### Available notification types
+
+ - `new_follower`
+ - `rejected_follower`
+ - `unfollow`
+ - `follow_request_accepted`
+ - `follow_request_rejected`
+ - `move`
+ - `like`
+ - `undo_like`
+ - `announce`
+ - `undo_announce`
+ - `mention`
+ - `new_webmention`
+ - `updated_webmention`
+ - `deleted_webmention`
+ - `blocked`
+ - `unblocked`
+ - `block`
+ - `unblock`
+
 ### Customization
 
 #### Default emoji
@@ -113,6 +146,7 @@ You can copy/paste them from [getemoji.com](https://getemoji.com/).
 #### Custom emoji
 
 You can add custom emoji in the `data/custom_emoji` directory and they will be picked automatically.
+Do not use exotic characters in filename - only letters, numbers, and underscore symbol `_` are allowed.
 
 #### Custom CSS
 

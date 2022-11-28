@@ -16,6 +16,8 @@ from loguru import logger
 from mistletoe import markdown  # type: ignore
 
 from app.customization import _CUSTOM_ROUTES
+from app.customization import _StreamVisibilityCallback
+from app.customization import default_stream_visibility_callback
 from app.utils.emoji import _load_emojis
 from app.utils.version import get_version_commit
 
@@ -117,6 +119,8 @@ class Config(pydantic.BaseModel):
     key_path: str | None = None
 
     session_timeout: int = 3600 * 24 * 3  # in seconds, 3 days by default
+
+    disabled_notifications: list[str] = []
 
     # Only set when the app is served on a non-root path
     id: str | None = None
@@ -262,3 +266,14 @@ def verify_csrf_token(
 
 def hmac_sha256() -> hmac.HMAC:
     return hmac.new(CONFIG.secret.encode(), digestmod=hashlib.sha256)
+
+
+stream_visibility_callback: _StreamVisibilityCallback
+try:
+    from data.stream import (  # type: ignore  # noqa: F401, E501
+        custom_stream_visibility_callback,
+    )
+
+    stream_visibility_callback = custom_stream_visibility_callback
+except ImportError:
+    stream_visibility_callback = default_stream_visibility_callback

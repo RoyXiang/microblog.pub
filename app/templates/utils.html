@@ -467,7 +467,7 @@
 </div>
 
     <p class="in-reply-to">in reply to <a href="{{ wm_reply.in_reply_to }}" title="{{ wm_reply.in_reply_to }}" rel="nofollow">
-        this note
+        this object
     </a></p>
 
     <div class="obj-content margin-top-20">
@@ -514,7 +514,7 @@
 
     {% if object.in_reply_to %}
     <p class="in-reply-to">in reply to <a href="{% if is_admin and object.is_in_reply_to_from_inbox %}{{ url_for("get_lookup") }}?query={% endif %}{{ object.in_reply_to }}" title="{{ object.in_reply_to }}" rel="nofollow">
-            this {{ object.ap_type|lower }}
+            this object
         </a></p>
     {% endif %}
 
@@ -549,12 +549,13 @@
     {% endif %}
 
     {% if object.summary %}
-    <div class="show-more-wrapper">
-        <div class="p-summary">
-            <p>{{ object.summary | clean_html(object) | safe }}</p>
-        </div>
-        <label for="show-more-{{ object.permalink_id }}" class="show-more-btn">show/hide more</label>
-        <input class="show-more-state" type="checkbox" aria-hidden="true" id="show-more-{{ object.permalink_id }}" checked>
+    <details class="show-more-wrapper">
+        <summary>
+            <div class="p-summary">
+                <p>{{ object.summary | clean_html(object) | safe }}</p>
+            </div>
+            <span class="show-more-btn" aria-hidden="true"></span>
+        </summary>
     {% endif %}
         <div class="obj-content">
         <div class="e-content">
@@ -615,7 +616,7 @@
 
         </div>
     {% if object.summary %}
-    </div>
+    </details>
     {% endif %}
 
     <div class="activity-attachment">
@@ -750,7 +751,7 @@
                 {{ admin_expand_button(object) }}
             </li>
         {% endif %}
-        {% if object.is_from_inbox and not object.announced_via_outbox_object_ap_id %}
+        {% if object.is_from_inbox and not object.announced_via_outbox_object_ap_id and object.is_local_reply %}
             <li>
                 {{ admin_force_delete_button(object.ap_id) }}
             </li>

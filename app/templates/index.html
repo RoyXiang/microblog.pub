@@ -26,7 +26,7 @@
     <div class="h-feed">
     <data class="p-name" value="{{ local_actor.display_name}}'s notes"></data>
     {% for outbox_object in objects %}
-    {% if outbox_object.ap_type in ["Note", "Article", "Video", "Question"] %}
+    {% if outbox_object.ap_type in ["Note", "Video", "Question"] %}
     {{ utils.display_object(outbox_object) }}
     {% elif outbox_object.ap_type == "Announce" %}
     <div class="h-entry" id="{{ outbox_object.permalink_id }}">
@@ -39,15 +39,17 @@
     {% endfor %}
     </div>
 
-    <div class="box">
-        {% if has_previous_page %}
-        <a href="{{ url_for("index") }}?page={{ current_page - 1 }}">Previous</a>
-        {% endif %}
+    {% if has_previous_page or has_next_page %}
+        <div class="box">
+            {% if has_previous_page %}
+            <a href="{{ url_for("index") }}?page={{ current_page - 1 }}">Previous</a>
+            {% endif %}
 
-        {% if has_next_page %}
-        <a href="{{ url_for("index") }}?page={{ current_page + 1 }}">Next</a>
-        {% endif %}
-    </div>
+            {% if has_next_page %}
+            <a href="{{ url_for("index") }}?page={{ current_page + 1 }}">Next</a>
+            {% endif %}
+        </div>
+    {% endif %}
 
 {% else %}
     <div class="empty-state">

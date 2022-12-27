@@ -1,4 +1,5 @@
 from datetime import datetime
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter
@@ -59,7 +60,9 @@ async def user_session_or_redirect(
 
     _RedirectToLoginPage = HTTPException(
         status_code=302,
-        headers={"Location": request.url_for("login") + f"?redirect={redirect_url}"},
+        headers={
+            "Location": request.url_for("login") + f"?redirect={quote(redirect_url)}"
+        },
     )
 
     if not session:
@@ -959,6 +962,34 @@ async def admin_actions_unblock(
     return RedirectResponse(redirect_url, status_code=302)
 
 
+@router.post("/actions/hide_announces")
+async def admin_actions_hide_announces(
+    request: Request,
+    ap_actor_id: str = Form(),
+    redirect_url: str = Form(),
+    csrf_check: None = Depends(verify_csrf_token),
+    db_session: AsyncSession = Depends(get_db_session),
+) -> RedirectResponse:
+    actor = await fetch_actor(db_session, ap_actor_id)
+    actor.are_announces_hidden_from_stream = True
+    await db_session.commit()
+    return RedirectResponse(redirect_url, status_code=302)
+
+
+@router.post("/actions/show_announces")
+async def admin_actions_show_announces(
+    request: Request,
+    ap_actor_id: str = Form(),
+    redirect_url: str = Form(),
+    csrf_check: None = Depends(verify_csrf_token),
+    db_session: AsyncSession = Depends(get_db_session),
+) -> RedirectResponse:
+    actor = await fetch_actor(db_session, ap_actor_id)
+    actor.are_announces_hidden_from_stream = False
+    await db_session.commit()
+    return RedirectResponse(redirect_url, status_code=302)
+
+
 @router.post("/actions/delete")
 async def admin_actions_delete(
     request: Request,
@@ -1151,7 +1182,7 @@ async def admin_actions_new(
     elif name:
         ap_type = "Article"
 
-    public_id = await boxes.send_create(
+    public_id, _ = await boxes.send_create(
         db_session,
         ap_type=ap_type,
         source=content,

@@ -10,9 +10,10 @@ from fastapi import Form
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from fastapi.responses import RedirectResponse
 from loguru import logger
+from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from app import config
 from app import models
@@ -21,6 +22,7 @@ from app.admin import user_session_or_redirect
 from app.config import verify_csrf_token
 from app.database import AsyncSession
 from app.database import get_db_session
+from app.redirect import redirect
 from app.utils import indieauth
 from app.utils.datetime import now
 
@@ -38,7 +40,52 @@ async def well_known_authorization_server(
         "code_challenge_methods_supported": ["S256"],
         "revocation_endpoint": request.url_for("indieauth_revocation_endpoint"),
         "revocation_endpoint_auth_methods_supported": ["none"],
+        "registration_endpoint": request.url_for("oauth_registration_endpoint"),
     }
+
+
+class OAuthRegisterClientRequest(BaseModel):
+    client_name: str
+    redirect_uris: list[str] | str
+
+    client_uri: str | None = None
+    logo_uri: str | None = None
+    scope: str | None = None
+
+
+@router.post("/oauth/register")
+async def oauth_registration_endpoint(
+    register_client_request: OAuthRegisterClientRequest,
+    db_session: AsyncSession = Depends(get_db_session),
+) -> JSONResponse:
+    """Implements OAuth 2.0 Dynamic Registration."""
+
+    client = models.OAuthClient(
+        client_name=register_client_request.client_name,
+        redirect_uris=[register_client_request.redirect_uris]
+        if isinstance(register_client_request.redirect_uris, str)
+        else register_client_request.redirect_uris,
+        client_uri=register_client_request.client_uri,
+        logo_uri=register_client_request.logo_uri,
+        scope=register_client_request.scope,
+        client_id=secrets.token_hex(16),
+        client_secret=secrets.token_hex(32),
+    )
+
+    db_session.add(client)
+    await db_session.commit()
+
+    return JSONResponse(
+        content={
+            **register_client_request.dict(),
+            "client_id_issued_at": int(client.created_at.timestamp()),  # type: ignore
+            "grant_types": ["authorization_code", "refresh_token"],
+            "client_secret_expires_at": 0,
+            "client_id": client.client_id,
+            "client_secret": client.client_secret,
+        },
+        status_code=201,
+    )
 
 
 @router.get("/auth")
@@ -56,12 +103,29 @@ async def indieauth_authorization_endpoint(
     code_challenge = request.query_params.get("code_challenge", "")
     code_challenge_method = request.query_params.get("code_challenge_method", "")
 
+    # Check if the authorization request is coming from an OAuth client
+    registered_client = (
+        await db_session.scalars(
+            select(models.OAuthClient).where(
+                models.OAuthClient.client_id == client_id,
+            )
+        )
+    ).one_or_none()
+    if registered_client:
+        client = {
+            "name": registered_client.client_name,
+            "logo": registered_client.logo_uri,
+            "url": registered_client.client_uri,
+        }
+    else:
+        client = await indieauth.get_client_id_data(client_id)  # type: ignore
+
     return await templates.render_template(
         db_session,
         request,
         "indieauth_flow.html",
         dict(
-            client=await indieauth.get_client_id_data(client_id),
+            client=client,
             scopes=scope,
             redirect_uri=redirect_uri,
             state=state,
@@ -80,7 +144,7 @@ async def indieauth_flow(
     db_session: AsyncSession = Depends(get_db_session),
     csrf_check: None = Depends(verify_csrf_token),
     _: None = Depends(user_session_or_redirect),
-) -> RedirectResponse:
+) -> templates.TemplateResponse:
     form_data = await request.form()
     logger.info(f"{form_data=}")
 
@@ -114,9 +178,8 @@ async def indieauth_flow(
     db_session.add(auth_request)
     await db_session.commit()
 
-    return RedirectResponse(
-        redirect_uri + f"?code={code}&state={state}&iss={iss}",
-        status_code=302,
+    return await redirect(
+        request, db_session, redirect_uri + f"?code={code}&state={state}&iss={iss}"
     )
 
 
@@ -207,29 +270,54 @@ async def indieauth_token_endpoint(
     form_data = await request.form()
     logger.info(f"{form_data=}")
     grant_type = form_data.get("grant_type", "authorization_code")
-    if grant_type != "authorization_code":
+    if grant_type not in ["authorization_code", "refresh_token"]:
         raise ValueError(f"Invalid grant_type {grant_type}")
-
-    code = form_data["code"]
 
     # These must match the params from the first request
     client_id = form_data["client_id"]
-    redirect_uri = form_data["redirect_uri"]
-    # code_verifier is optional for backward compat
     code_verifier = form_data.get("code_verifier")
 
-    is_code_valid, auth_code_request = await _check_auth_code(
-        db_session,
-        code=code,
-        client_id=client_id,
-        redirect_uri=redirect_uri,
-        code_verifier=code_verifier,
-    )
-    if not is_code_valid or (auth_code_request and not auth_code_request.scope):
-        return JSONResponse(
-            content={"error": "invalid_grant"},
-            status_code=400,
+    if grant_type == "authorization_code":
+        code = form_data["code"]
+        redirect_uri = form_data["redirect_uri"]
+        # code_verifier is optional for backward compat
+        is_code_valid, auth_code_request = await _check_auth_code(
+            db_session,
+            code=code,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            code_verifier=code_verifier,
         )
+        if not is_code_valid or (auth_code_request and not auth_code_request.scope):
+            return JSONResponse(
+                content={"error": "invalid_grant"},
+                status_code=400,
+            )
+
+    elif grant_type == "refresh_token":
+        refresh_token = form_data["refresh_token"]
+        access_token = (
+            await db_session.scalars(
+                select(models.IndieAuthAccessToken)
+                .where(
+                    models.IndieAuthAccessToken.refresh_token == refresh_token,
+                    models.IndieAuthAccessToken.was_refreshed.is_(False),
+                )
+                .options(
+                    joinedload(
+                        models.IndieAuthAccessToken.indieauth_authorization_request
+                    )
+                )
+            )
+        ).one_or_none()
+        if not access_token:
+            raise ValueError("invalid refresh token")
+
+        if access_token.indieauth_authorization_request.client_id != client_id:
+            raise ValueError("invalid client ID")
+
+        auth_code_request = access_token.indieauth_authorization_request
+        access_token.was_refreshed = True
 
     if not auth_code_request:
         raise ValueError("Should never happen")
@@ -237,6 +325,7 @@ async def indieauth_token_endpoint(
     access_token = models.IndieAuthAccessToken(
         indieauth_authorization_request_id=auth_code_request.id,
         access_token=secrets.token_urlsafe(32),
+        refresh_token=secrets.token_urlsafe(32),
         expires_in=3600,
         scope=auth_code_request.scope,
     )
@@ -246,6 +335,7 @@ async def indieauth_token_endpoint(
     return JSONResponse(
         content={
             "access_token": access_token.access_token,
+            "refresh_token": access_token.refresh_token,
             "token_type": "Bearer",
             "scope": auth_code_request.scope,
             "me": config.ID + "/",
@@ -261,8 +351,10 @@ async def _check_access_token(
 ) -> tuple[bool, models.IndieAuthAccessToken | None]:
     access_token_info = (
         await db_session.scalars(
-            select(models.IndieAuthAccessToken).where(
-                models.IndieAuthAccessToken.access_token == token
+            select(models.IndieAuthAccessToken)
+            .where(models.IndieAuthAccessToken.access_token == token)
+            .options(
+                joinedload(models.IndieAuthAccessToken.indieauth_authorization_request)
             )
         )
     ).one_or_none()
@@ -285,6 +377,7 @@ async def _check_access_token(
 @dataclass(frozen=True)
 class AccessTokenInfo:
     scopes: list[str]
+    client_id: str | None
 
 
 async def verify_access_token(
@@ -311,7 +404,55 @@ async def verify_access_token(
 
     return AccessTokenInfo(
         scopes=access_token.scope.split(),
+        client_id=(
+            access_token.indieauth_authorization_request.client_id
+            if access_token.indieauth_authorization_request
+            else None
+        ),
     )
+
+
+async def check_access_token(
+    request: Request,
+    db_session: AsyncSession = Depends(get_db_session),
+) -> AccessTokenInfo | None:
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ")
+    if not token:
+        return None
+
+    is_token_valid, access_token = await _check_access_token(db_session, token)
+    if not is_token_valid:
+        return None
+
+    if not access_token or not access_token.scope:
+        raise ValueError("Should never happen")
+
+    access_token_info = AccessTokenInfo(
+        scopes=access_token.scope.split(),
+        client_id=(
+            access_token.indieauth_authorization_request.client_id
+            if access_token.indieauth_authorization_request
+            else None
+        ),
+    )
+
+    logger.info(
+        "Authenticated with access token from client_id="
+        f"{access_token_info.client_id} scopes={access_token.scope}"
+    )
+
+    return access_token_info
+
+
+async def enforce_access_token(
+    request: Request,
+    db_session: AsyncSession = Depends(get_db_session),
+) -> AccessTokenInfo:
+    maybe_access_token_info = await check_access_token(request, db_session)
+    if not maybe_access_token_info:
+        raise HTTPException(status_code=401, detail="access token required")
+
+    return maybe_access_token_info
 
 
 @router.post("/revoke_token")

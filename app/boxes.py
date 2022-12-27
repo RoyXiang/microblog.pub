@@ -592,7 +592,7 @@ async def send_create(
     poll_answers: list[str] | None = None,
     poll_duration_in_minutes: int | None = None,
     name: str | None = None,
-) -> str:
+) -> tuple[str, models.OutboxObject]:
     note_id = allocate_outbox_id()
     published = now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
     context = f"{ID}/contexts/" + uuid.uuid4().hex
@@ -767,7 +767,7 @@ async def send_create(
 
     await db_session.commit()
 
-    return note_id
+    return note_id, outbox_object
 
 
 async def send_vote(
@@ -950,7 +950,7 @@ async def compute_all_known_recipients(db_session: AsyncSession) -> set[str]:
     }
 
 
-async def _get_following(db_session: AsyncSession) -> list[models.Follower]:
+async def _get_following(db_session: AsyncSession) -> list[models.Following]:
     return (
         (
             await db_session.scalars(
@@ -2205,7 +2205,10 @@ async def _handle_announce_activity(
                 db_session.add(announced_inbox_object)
                 await db_session.flush()
                 announce_activity.relates_to_inbox_object_id = announced_inbox_object.id
-                announce_activity.is_hidden_from_stream = not is_from_following
+                announce_activity.is_hidden_from_stream = (
+                    not is_from_following
+                    or announce_activity.actor.are_announces_hidden_from_stream
+                )
 
 
 async def _handle_like_activity(

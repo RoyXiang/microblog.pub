@@ -54,6 +54,10 @@ class Actor(Base, BaseActor):
     is_blocked = Column(Boolean, nullable=False, default=False, server_default="0")
     is_deleted = Column(Boolean, nullable=False, default=False, server_default="0")
 
+    are_announces_hidden_from_stream = Column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+
     @property
     def is_from_db(self) -> bool:
         return True
@@ -461,11 +465,37 @@ class IndieAuthAccessToken(Base):
     indieauth_authorization_request_id = Column(
         Integer, ForeignKey("indieauth_authorization_request.id"), nullable=True
     )
+    indieauth_authorization_request = relationship(
+        IndieAuthAuthorizationRequest,
+        uselist=False,
+    )
 
     access_token = Column(String, nullable=False, unique=True, index=True)
+    refresh_token = Column(String, nullable=True, unique=True, index=True)
     expires_in = Column(Integer, nullable=False)
     scope = Column(String, nullable=False)
     is_revoked = Column(Boolean, nullable=False, default=False)
+    was_refreshed = Column(Boolean, nullable=False, default=False, server_default="0")
+
+
+class OAuthClient(Base):
+    __tablename__ = "oauth_client"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=now)
+
+    # Request
+    client_name = Column(String, nullable=False)
+    redirect_uris: Mapped[list[str]] = Column(JSON, nullable=True)
+
+    # Optional from request
+    client_uri = Column(String, nullable=True)
+    logo_uri = Column(String, nullable=True)
+    scope = Column(String, nullable=True)
+
+    # Response
+    client_id = Column(String, nullable=False, unique=True, index=True)
+    client_secret = Column(String, nullable=False, unique=True)
 
 
 @enum.unique

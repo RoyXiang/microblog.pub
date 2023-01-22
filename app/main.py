@@ -1256,7 +1256,11 @@ async def post_remote_interaction(
 @app.get("/.well-known/webfinger")
 async def wellknown_webfinger(resource: str) -> JSONResponse:
     """Exposes/servers WebFinger data."""
-    if resource not in [f"acct:{USERNAME}@{DOMAIN}", ID]:
+    if resource not in [
+        f"acct:{USERNAME}@{WEBFINGER_DOMAIN}",
+        ID,
+        f"acct:{USERNAME}@{DOMAIN}",
+    ]:
         logger.info(f"Got invalid req for {resource}")
         raise HTTPException(status_code=404)
 
@@ -1690,9 +1694,9 @@ async def _gen_rss_feed(
 
         fe = fg.add_entry()
         fe.id(outbox_object.url)
-
-        # Atom feeds require a title
-        if not is_rss:
+        if outbox_object.name is not None:
+            fe.title(outbox_object.name)
+        elif not is_rss: # Atom feeds require a title
             fe.title(outbox_object.url)
 
         fe.link(href=outbox_object.url)
